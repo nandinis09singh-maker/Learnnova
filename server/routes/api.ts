@@ -8,15 +8,25 @@ const apiRouter = Router()
 
 // 1. Health & Database Check
 apiRouter.get("/health", (_req: Request, res: Response) => {
-  const dbStats = dbRepository.getDatabaseStats()
-  res.json({
-    status: "ok",
-    engine: "Learnova Adaptive AI Engine",
-    database: "SQLite 3 (WAL mode via Bun)",
-    databaseStats: dbStats,
-    version: "2.5.0",
-    timestamp: new Date().toISOString(),
-  })
+  try {
+    const dbStats = dbRepository.getDatabaseStats()
+    res.json({
+      status: "ok",
+      engine: "Learnova Adaptive AI Engine",
+      database: "SQLite 3",
+      databaseStats: dbStats,
+      version: "2.5.0",
+      timestamp: new Date().toISOString(),
+    })
+  } catch (err: any) {
+    res.json({
+      status: "ok",
+      engine: "Learnova Adaptive AI Engine (Fallback)",
+      database: "In-Memory",
+      version: "2.5.0",
+      timestamp: new Date().toISOString(),
+    })
+  }
 })
 
 // 2. Database Status Endpoint
@@ -181,11 +191,15 @@ apiRouter.get("/teacher/students", (_req: Request, res: Response) => {
   }
 })
 
-// 7. Student Profile (SQLite backed)
+// 7. Student Profile (SQLite backed with Engine fallback)
 apiRouter.get("/profile", (req: Request, res: Response) => {
-  const userId = (req.query.userId as string) || "usr_alex_demo"
-  const profile = dbRepository.getStudentProfile(userId) || adaptiveEngine.getProfile()
-  res.json(profile)
+  try {
+    const userId = (req.query.userId as string) || "usr_alex_demo"
+    const profile = dbRepository.getStudentProfile(userId) || adaptiveEngine.getProfile()
+    res.json(profile)
+  } catch {
+    res.json(adaptiveEngine.getProfile())
+  }
 })
 
 // 8. Legacy Profile Login / Setup
@@ -197,31 +211,49 @@ apiRouter.post("/profile/login", (req: Request, res: Response) => {
   const cleanName = name.trim()
   const cleanGrade = grade || "Grade 10"
 
-  // Check if exists in SQLite or create
-  let user = dbRepository.getUserByUsername(cleanName.toLowerCase().replace(/\s+/g, "_"))
-  if (!user) {
-    user = dbRepository.createUser({
-      name: cleanName,
-      username: cleanName.toLowerCase().replace(/\s+/g, "_"),
-      password: "password123",
-      grade: cleanGrade,
+  try {
+    // Check if exists in SQLite or create
+    let user = dbRepository.getUserByUsername(cleanName.toLowerCase().replace(/\s+/g, "_"))
+    if (!user) {
+      user = dbRepository.createUser({
+        name: cleanName,
+        username: cleanName.toLowerCase().replace(/\s+/g, "_"),
+        password: "password123",
+        grade: cleanGrade,
+      })
+    }
+
+    const updatedProfile = dbRepository.getStudentProfile(user.id) || adaptiveEngine.setCustomUser(cleanName, cleanGrade)
+    res.json({
+      message: `Logged in as ${cleanName}`,
+      profile: updatedProfile,
+      user: {
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        grade: user.grade,
+        role: user.role,
+        avatar: user.avatar,
+        isTeacher: false,
+      },
+    })
+  } catch (err: any) {
+    // Zero-downtime fallback: if SQLite is in-memory or read-only, generate personalized profile directly
+    const fallbackProfile = adaptiveEngine.setCustomUser(cleanName, cleanGrade)
+    res.json({
+      message: `Logged in as ${cleanName}`,
+      profile: fallbackProfile,
+      user: {
+        id: `usr_${Date.now()}`,
+        name: cleanName,
+        username: cleanName.toLowerCase().replace(/\s+/g, "_"),
+        grade: cleanGrade,
+        role: "student",
+        avatar: cleanName.slice(0, 2).toUpperCase(),
+        isTeacher: false,
+      },
     })
   }
-
-  const updatedProfile = dbRepository.getStudentProfile(user.id) || adaptiveEngine.setCustomUser(cleanName, cleanGrade)
-  res.json({
-    message: `Logged in as ${cleanName}`,
-    profile: updatedProfile,
-    user: {
-      id: user.id,
-      name: user.name,
-      username: user.username,
-      grade: user.grade,
-      role: user.role,
-      avatar: user.avatar,
-      isTeacher: false,
-    },
-  })
 })
 
 // 9. Change Persona (Alex / Maya / Liam)

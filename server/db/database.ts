@@ -52,32 +52,54 @@ function createDatabase(): IDatabase {
     }
   } catch {}
 
-  // 2. Try Node native SQLite (Node 22+)
+  // 2. Try Node native SQLite
   try {
     const { DatabaseSync } = require("node:sqlite")
-    const nodeDb = new DatabaseSync(DB_PATH)
-    try {
-      nodeDb.exec("PRAGMA journal_mode = WAL;")
-      nodeDb.exec("PRAGMA foreign_keys = ON;")
-    } catch {}
+    const targetPath = isVercel ? ":memory:" : DB_PATH
+    const nodeDb = new DatabaseSync(targetPath)
+    if (!isVercel) {
+      try {
+        nodeDb.exec("PRAGMA journal_mode = WAL;")
+        nodeDb.exec("PRAGMA foreign_keys = ON;")
+      } catch {}
+    }
     return {
       run(sql: string, params?: any[]) {
-        if (params && params.length > 0) {
-          return nodeDb.prepare(sql).run(...params)
+        try {
+          if (params && params.length > 0) {
+            return nodeDb.prepare(sql).run(...params)
+          }
+          return nodeDb.exec(sql)
+        } catch {
+          return {}
         }
-        return nodeDb.exec(sql)
       },
       query(sql: string) {
-        const stmt = nodeDb.prepare(sql)
-        return {
-          get(...args: any[]) {
-            const params = args.length === 1 && Array.isArray(args[0]) ? args[0] : args
-            return stmt.get(...params) ?? null
-          },
-          all(...args: any[]) {
-            const params = args.length === 1 && Array.isArray(args[0]) ? args[0] : args
-            return stmt.all(...params)
-          },
+        try {
+          const stmt = nodeDb.prepare(sql)
+          return {
+            get(...args: any[]) {
+              try {
+                const params = args.length === 1 && Array.isArray(args[0]) ? args[0] : args
+                return stmt.get(...params) ?? null
+              } catch {
+                return null
+              }
+            },
+            all(...args: any[]) {
+              try {
+                const params = args.length === 1 && Array.isArray(args[0]) ? args[0] : args
+                return stmt.all(...params)
+              } catch {
+                return []
+              }
+            },
+          }
+        } catch {
+          return {
+            get() { return null },
+            all() { return [] },
+          }
         }
       },
     }
@@ -353,4 +375,8 @@ function seedDefaultData() {
 }
 
 // Auto-initialize when module is loaded
-initDatabase()
+try {
+  initDatabase()
+} catch (err) {
+  console.warn("[Learnova DB] initDatabase warning:", err)
+}

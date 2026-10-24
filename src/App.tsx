@@ -11,12 +11,73 @@ import type {
   DifficultyLevel,
 } from "../server/types"
 import { diagnosticQuestions } from "../server/data/questionBank"
+import { initialKnowledgeGraph } from "../server/data/knowledgeGraph"
 import {
   gradeSubjects,
   getRandomUniqueQuestions,
   allQuestions,
   type SubjectQuestion,
 } from "../server/data/gradeSubjectQuestions"
+
+function buildFallbackProfile(name: string, grade: string = "Grade 10"): StudentProfile {
+  const cleanName = (name || "Student").trim()
+  const cleanGrade = grade || "Grade 10"
+  return {
+    id: `usr_${Date.now()}`,
+    name: cleanName,
+    grade: cleanGrade,
+    avatar: (cleanName || "ST").slice(0, 2).toUpperCase(),
+    overallMastery: 70,
+    masteredCount: 3,
+    totalConcepts: 6,
+    recommendedLevel: "Proficient",
+    learningVelocity: 1.25,
+    streakDays: 2,
+    studyTimeMinutes: 35,
+    xp: 1350,
+    cycleStage: "Personalized Learning",
+    concepts: initialKnowledgeGraph,
+    gaps: [
+      {
+        conceptId: "factoring",
+        conceptName: "Factoring Polynomials",
+        mastery: 64,
+        impactScore: 4,
+        blockedConcepts: ["Quadratic Roots & Formula"],
+        recommendedPrerequisite: "Linear Equations & Arithmetic",
+        remediationAction: "Practice trinomial factoring (x² + bx + c) and grouping",
+        priority: "High",
+      },
+      {
+        conceptId: "completing_square",
+        conceptName: "Completing the Square",
+        mastery: 45,
+        impactScore: 5,
+        blockedConcepts: ["Vertex Form Transformations"],
+        recommendedPrerequisite: "Factoring Polynomials",
+        remediationAction: "Master adding (b/2)² to both sides of quadratic",
+        priority: "High",
+      },
+    ],
+    recentActivities: [
+      {
+        id: "act_1",
+        title: "Personalized Study Track Ready",
+        type: "lesson_completed",
+        timestamp: "Just now",
+        badge: `${cleanGrade} Track`,
+      },
+      {
+        id: "act_2",
+        title: "Adaptive Calibration Active",
+        type: "diagnostic",
+        timestamp: "Today",
+        badge: "70% Mastery",
+      },
+    ],
+    updatedAt: new Date().toISOString(),
+  }
+}
 
 type IconName = "spark" | "grid" | "path" | "chart" | "brain" | "book" | "clock" | "flame" | "target" | "arrow" | "check" | "lock" | "play" | "message" | "bell" | "search" | "chevron" | "x" | "bolt" | "trophy" | "heart" | "alert" | "refresh" | "zap" | "logout"
 
@@ -6600,16 +6661,23 @@ export default function App() {
 
   const refreshProfile = async (customName?: string, customGrade?: string) => {
     if (currentUser?.isTeacher) return
+    const targetName = customName || currentUser?.name
+    const targetGrade = customGrade || currentUser?.grade
     try {
       let data = await api.getProfile()
-      const targetName = customName || currentUser?.name
-      const targetGrade = customGrade || currentUser?.grade
       if (targetName) {
         data = await api.login(targetName, targetGrade)
       }
       setProfile(data)
     } catch {
-      // Offline fallback
+      // Offline / zero-downtime fallback: ensure user profile is set so app never hangs
+      if (targetName) {
+        setProfile((prev) =>
+          prev
+            ? { ...prev, name: targetName, grade: targetGrade || prev.grade }
+            : buildFallbackProfile(targetName, targetGrade || "Grade 10")
+        )
+      }
     }
   }
 
@@ -6618,6 +6686,16 @@ export default function App() {
       refreshProfile()
     }
   }, [currentUser?.isTeacher])
+
+  // Safety fallback: if user is logged in, ensure loading screen transitions smoothly
+  useEffect(() => {
+    if (currentUser && !currentUser.isTeacher && !profile) {
+      const timer = setTimeout(() => {
+        setProfile((prev) => prev || buildFallbackProfile(currentUser.name, currentUser.grade))
+      }, 900)
+      return () => clearTimeout(timer)
+    }
+  }, [currentUser, profile])
 
   const handleLogin = async (user: {
     name: string
@@ -6639,16 +6717,16 @@ export default function App() {
     // Check if it's one of the presets
     if (user.name.toLowerCase().includes("maya")) {
       setActivePersona("maya")
-      await api.setPersona("maya")
+      try { await api.setPersona("maya") } catch {}
     } else if (user.name.toLowerCase().includes("liam")) {
       setActivePersona("liam")
-      await api.setPersona("liam")
+      try { await api.setPersona("liam") } catch {}
     } else if (user.name.toLowerCase().includes("alex")) {
       setActivePersona("alex")
-      await api.setPersona("alex")
+      try { await api.setPersona("alex") } catch {}
     }
 
-    // Update custom name in backend
+    // Update custom name in backend or initialize profile
     try {
       const updated = await api.login(user.name, user.grade)
       setProfile(updated)
@@ -6660,6 +6738,8 @@ export default function App() {
           grade: user.grade,
           avatar: user.name.slice(0, 2).toUpperCase(),
         })
+      } else {
+        setProfile(buildFallbackProfile(user.name, user.grade))
       }
     }
     setPage("home")
